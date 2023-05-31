@@ -1,5 +1,7 @@
 # LLM-Agent
-An autonomous GPT-3 agent 
+An autonomous GPT-3 agent.
+
+I understand that this code looks ugly and needs some cleaning up but unfortunately I am too lazy to do that at the moment. 
 
 ## How to run
 
