@@ -3,6 +3,7 @@ import os
 import openai
 import sys
 import ast 
+import shlex
 import time 
 import subprocess
 
@@ -31,7 +32,7 @@ def getResponse(prompt, system_msg = "you are a helpful assistant"):
 	result = response["choices"][0]["message"]["content"] 
 	return  result
 
-response_format = '''Respond only in the format given below, don't add any extra text. If any extra text is present in your response,
+response_format_prompt = '''Respond only in the format given below, don't add any extra text. If any extra text is present in your response,
 	the answer won't be parsable by the user, so always respond only in the format. This is crucial.  
 
 	The format is a python dictionary, like this: {'type': 'write', 'params': {'path': 'path/to/file', 'content': 'content'}, 'reason': '<reason for the task>'}
@@ -61,29 +62,21 @@ response_format = '''Respond only in the format given below, don't add any extra
 
 	NOTE: Before coming up next tasks, check the previous tasks that are finished If no other tasks are remaining for the goal, just return {'type': 'finished'} WITHOUT any other text preceding or succeeding it. I REPEAT, CHECK THE LIST OF FINISHED TASK TO SEE IF ANYTHING MORE HAS TO BE DONE BEFORE SUGGESTING THE NEXT TASK
 
-You shall NOT use pdb to debug. 
-You shall NOT install any new packages or tools 
+	You shall NOT use pdb to debug. 
+	You shall NOT install any new packages or tools 
 
-	NOTE: Before coming up with the next task, confirm that the next task is not already executed. If it's executed, DO NOT repeat it. If repeating is necessary for some reason, CLEARLY explain why in the "reason" field. 
+     NOTE: Before coming up with the next task, confirm that the next task is not already executed. If it's executed, DO NOT repeat it. If repeating is necessary for some reason, CLEARLY explain why in the "reason" field. 
 
-If the last line of this prompt is a question (that ends with "?") then, respond in the following format
+	If the last line of this prompt is a question (that ends with "?") then, respond in the following format
+	{'type': 'info', 'content': '<your response>'}. This is not considered as a task. 
 
-{'type': 'info', 'content': '<your response>'}. This is not considered as a task. 
-
-
-DO NOT write your response as free text. Only send response in the requested format.
-
-
-If you want me to send you some data in the future, for reference, you can send it in a field called "data". For e.g. if you
-read a file for some information and would need to know about it in a future task, you can set it as "data" as I will send
-it back to you in the future as part of the prompt
-
+	DO NOT write your response as free text. Only send response in the requested format.
 '''	
 
 steps_so_far = []
 goal = ""
 
-
+# not in use 
 def verify(res):
 
 	completed_tasks = "\n".join([str(s) for s in steps_so_far])
@@ -106,11 +99,7 @@ def verify(res):
 	result = getResponse(prompt)
 
 	if result[:2] == "No":
-		print(result) 
 		verifier_suggestion = ''' 
-			The last task you gave was incorrect. A task checker, which verifies if the tasks are
-			correct, said the following about the previous task.
-
 			task: %s,
 			checker response: %s
 
@@ -120,16 +109,11 @@ def verify(res):
 		steps_so_far.append({'task': task, 'task_execution_report': {'success':False, 'error': 'verifier stopped task from executing. Reason: %s'%(result)}})
 		main(verifier_suggestion)
 		return 
-	
-	print("\n\n")
-	print(result)
 
+# not in use 
 def checkIfDone():
 		
 	prompt = '''check if the goal is accomplished given the list of tasks done so far.
-
-
-
 
 			goal: %s,
 			tasks done so far: %s
@@ -140,13 +124,11 @@ def checkIfDone():
 	result = getResponse(prompt)
 	return result
 
-import shlex
 
 def parse(command, prefix = ""):
 	command = prefix + " " + command
 	return shlex.split(command)	
 
-import subprocess
 def run(command):
 	report = dict()
 	try:
@@ -196,7 +178,6 @@ def write(path, content):
 		report["success"] = False
 		report["error"] = str(e)
 	return report 
-import os 
 
 def navigate(path):
 	report = dict()
@@ -232,67 +213,56 @@ def strip(string):
 
 discarded_tasks = list()
 
+def construct_prompt(prefix, reduce_context): 
+	completed_tasks = [str(s) for s in steps_so_far]
+	if len(completed_tasks) > 5:
+		completed_tasks = completed_tasks[-5:]
+
+	if reduce_context:
+		completed_tasks = completed_tasks[1:]
+
+	completed_tasks = "\n\n".join(completed_tasks)
+	last_discareded_tasks = "\n\n".join(discarded_tasks[-3:] if len(discarded_tasks) > 3 else discarded_tasks)	
+
+	main_prompt = '''
+		you are an AI agent, your goal is to break down goals and execute them. You can do one of four things
+		you can either read a file, write to a file, or run a command on linux, or navigate to a directory. 
+		You can do each of them as many times 
+		as you want. Your job is to convert any given goal into a series of steps of the given three type. 
+
+		You have to do these tasks one at a time. For the goal that's presented below, find the immediate next step
+		
+		Here are the last 5 task you've done: %s
+		If some previous steps are missing, and you're unsure whether they're done, 
+		you can assume it was completed. DO NOT do those tasks again.  
+
+		you are performing your goal as part of larger goal, which is: %s	
+		It was broken down into a series of goals, like this: \n%s
+
+		NOTE: Here is current goal you're pursuing: %s
+		your current goal is one among the series of goals mentioned above 
+		once the current goal is finished, respond with {"type":"finished"}
+		if you think the current goal is already accomplished, directly respond with {"type":"finished"}
+
+		here is a summary of the things you've accomplished so far: %s
+
+		Here are the last 3 discarded tasks which were never executed, along with the user comments %s
+
+''' % (str(completed_tasks), mega_goal, all_goals, goal[2:], context, last_discareded_tasks) 
+	last_task = ""
+
+	if (len(steps_so_far) > 0):	
+		result = steps_so_far[-1]['task_execution_report']['output'] if steps_so_far[-1]['task_execution_report']['success'] else steps_so_far[-1]['task_execution_report']['error']
+		last_task = "Last task results: \ntask: %s,\noutput/error: %s,\nsuccess: %s" % (steps_so_far[-1]['task'], result,  steps_so_far[-1]['task_execution_report']['success'])
+
+	return prefix + main_prompt + response_format_prompt + last_task + "\n If you think the 'current goal' you're pursuing is already accomplished, respond directly with {'task': 'finished'}\n"
+	
+
 def main(prefix="", reduce_context = False):
 	
 	while(True):
-		completed_tasks = [str(s) for s in steps_so_far]
-		if len(completed_tasks) > 5:
-			completed_tasks = completed_tasks[-5:]
 
-		if reduce_context:
-			completed_tasks = completed_tasks[1:]
-
-		completed_tasks = "\n\n".join(completed_tasks)
-		last_discareded_tasks = "\n\n".join(discarded_tasks[-3:] if len(discarded_tasks) > 3 else discarded_tasks)	
-
-
-		prompt = '''
-			you are an AI agent, your goal is to break down goals and execute them. You can do one of four things
-			you can either read a file, write to a file, or run a command on linux, or navigate to a directory. 
-			You can do each of them as many times 
-			as you want. Your job is to convert any given goal into a series of steps of the given three type. 
-
-			You have to do these tasks one at a time. For the goal that's presented below, find the immediate next step
-			
-			Here are the last 5 task you've done: %s
-			If some previous steps are missing, and you're unsure whether they're done, 
-			you can assume it was completed. DO NOT do those tasks again.  
-
-			you are performing your goal as part of larger goal, which is: %s	
-			It was broken down into a series of goals, like this: \n%s
-
-			NOTE: Here is current goal you're pursuing: %s
-			your current goal is one among the series of goals mentioned above 
-			once the current goal is finished, respond with {"type":"finished"}
-			if you think the current goal is already accomplished, directly respond with {"type":"finished"}
-
-			here is a summary of the things you've accomplished so far: %s
-
-			Here are the last 3 discarded tasks which were never executed, along with the user comments %s
-
-''' % (str(completed_tasks), mega_goal, all_goals, goal[2:], context, last_discareded_tasks) 
-
-		# print("Current goal: ", goal)
-		# print("Current context: ", context) 	
-
-		last_task = ""
-		# print("\n")
-
-		if (len(steps_so_far) > 0):	
-			result = steps_so_far[-1]['task_execution_report']['output'] if steps_so_far[-1]['task_execution_report']['success'] else steps_so_far[-1]['task_execution_report']['error']
-			last_task = "Last task results: \ntask: %s,\noutput/error: %s,\nsuccess: %s" % (steps_so_far[-1]['task'], result,  steps_so_far[-1]['task_execution_report']['success'])
-
-		final_prompt = prefix + prompt + response_format + last_task + "\n If you think the 'current goal' you're pursuing is already accomplished, respond directly with {'task': 'finished'}\n"
-		
-		'''
-		if completed_tasks != "":
-			print("completed tasks: \n" + completed_tasks + "\n")
-
-		if last_discareded_tasks != "":
-			print("last discareded tasks: \n" + last_discareded_tasks + "\n")	
-
-		print(last_task)
-		'''
+		final_prompt = construct_prompt(prefix, reduce_context)
 		user_input = input("comments>")
 		
 		if len(user_input) > 2 and user_input[-1] == "?":
@@ -304,81 +274,62 @@ def main(prefix="", reduce_context = False):
 			return main(user_input, True)
  
 		print("------------------------------------------\nNext Task (from GPT): ", res) 
+		
 		if "{'type': 'finished'}" in res: 
 				print("Goal accomplished successfully: %s, \nMoving onto next one..." % (goal))
 				return 
 
 		res = strip(res)
 		user_comment = input("User Comment (leave blank if approved)")
+
 		if user_comment == "skip":
-			return 
+			continue 	
 
 		if user_comment != "":
 			discarded_tasks.append(res + "\n user comment: %s" % (user_comment))			
 			return main("The last task was declined by user with this commment %s" % (user_comment))			
+
 		try: 	
 			task = ast.literal_eval(res)
-			if task['type'] == "info":
-				print("\n" + task['content'])
-				return main() 
-	
-				
-			# verify(res)
-			report = dict() 
-		
-			# print("Steps so far", steps_so_far)
-			#if 	lastTaskRepeating(res):	
-				# print("Last step is repeated, and it was already successful")
-			#	return main("This step was already executed before, please move on to next step. Step: %s"%(res))
-
-
-			if task['type'] == 'run':
-				report = run(task['params']['command'])
-			elif task['type'] == 'write':
-				report = write(task['params']['path'], task['params']['content']);
-			elif task['type'] == 'read':
-				report = read(task['params']['path'])
-			elif task['type'] == 'navigate':
-				report = navigate(task['params']['path'])	
-
-			if report["success"] == False:
-				prompt = '''Your last task failed. 
-				task: %s, 
-				error: %s
-
-				Please fix this error as your next task
-				Try to gather more information by running commands or reading files to 
-				make sure you guess for the root cause is correct.
-
-				''' % (res, report["error"]) 
-		
-				print("Task failed, ", report) 
-				steps_so_far.append({'task': task, 'task_execution_report': report}) 
-				return main(prompt)
-				return 
-
-			print("Tasks completed successfully, report: ", report)
-			steps_so_far.append({'task': task, 'task_execution_report': report}) 
-
+			handleTask(task)
 		except Exception as e:
 			print("Response not in correct format; requesting response again") 
-		    	
 			return main("Please don't add extra words in your response. Only write responses in the format requested. Your last response: %s"%(res))
-			break 
 
-		# checkIfDone()
-		# isDone = checkIfDone()
-		# print("isDone: ", isDone)
-	
-		'''	
-		if isDone[:3] == "Yes":
-			print("Goal accomplished!")
-			return 
-		'''
-	
-		if task['type'] == 'finished':
-			print("All tasks completed!")
-			break
+def handleTask(task): 
+	if task['type'] == "info":
+		print("\n" + task['content'])
+		return main() 
+		
+	report = dict() 
+
+	if task['type'] == 'run':
+		report = run(task['params']['command'])
+	elif task['type'] == 'write':
+		report = write(task['params']['path'], task['params']['content']);
+	elif task['type'] == 'read':
+		report = read(task['params']['path'])
+	elif task['type'] == 'navigate':
+		report = navigate(task['params']['path'])	
+
+	if report["success"] == False:
+		prompt = '''Your last task failed. 
+		task: %s, 
+		error: %s
+
+		Please fix this error as your next task
+		Try to gather more information by running commands or reading files to 
+		make sure you guess for the root cause is correct.
+
+		''' % (res, report["error"]) 
+
+		print("Task failed, ", report) 
+		steps_so_far.append({'task': task, 'task_execution_report': report}) 
+		return main(prompt)
+
+	print("Tasks completed successfully, report: ", report)
+	steps_so_far.append({'task': task, 'task_execution_report': report}) 
+
 
 prev_goals = list()
 all_goals = ""
@@ -390,11 +341,11 @@ def getContext(steps_so_far):
 	if len(steps_so_far) == 0:
 		return "No tasks were previously done" 
 
-	c = getResponse("Based on these steps for the previous goal, and the summary of all the work done until then, give a short summary of all that was done, but DO NOT leave out important details like filenames or pathnames, they might be necessary to know for future tasks\n steps for previous goal %s\n summary until now %s" + str(steps_so_far))
-	if c == "Max context length reached":
+	result = getResponse("Based on these steps for the previous goal, and the summary of all the work done until then, give a short summary of all that was done, but DO NOT leave out important details like filenames or pathnames, they might be necessary to know for future tasks\n steps for previous goal %s\n summary until now %s" + str(steps_so_far))
+	if result  == "Max context length reached":
 		print("Too many tasks done, and the context length is exeeding. Removing a task to fit in context length for summary calculation")
 		return getContext(steps_so_far[1:])
-	return c
+	return result  
 
 if __name__ == '__main__':
 	while(True):
@@ -417,15 +368,11 @@ if __name__ == '__main__':
 
 		Keep each instruction in a SINGLE line.
 ''' % (goal)
-
-		# all_goals = getResponse("Break this down into a very short list of numbered goals, which has to be executed one after the other: %s. If the task is simple enough, do not break them down, just return it numbered as 1. Do not mention anything other than the numbered list of goals. The broken down goals should have sufficient information to carry out the task using an automated tool. At each step you can only do one of four things: read a file to gather information about something, write to a file, navigate to a directory, or run a command; so each goal should do one of those four steps. DO NOT miss any crucial details mentioned. The thing to break down:  " % (goal))
- 
 		all_goals = getResponse(goal_split_prompt) 	
 		print(all_goals)
 		
 		for cur_goal in all_goals.strip().split("\n"):
 			context = getContext(steps_so_far)
-			# steps_so_far = list()
 			discarded_tasks = list()
 			goal = cur_goal
 			print("\n Now pursuing: %s\n" % (goal))
