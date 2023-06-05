@@ -1,5 +1,6 @@
 import subprocess
 import os 
+import shlex
 
 def parse(command, prefix = ""):
 	command = prefix + " " + command
