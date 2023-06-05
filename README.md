@@ -1,10 +1,10 @@
 # LLM-Agent
-An autonomous GPT-3 agent.
+An autonomous GPT-3 agent. You'll need an OpenAI API key to run it. 
 
-I understand that this code looks ugly and needs some cleaning up but unfortunately I am too lazy to do that at the moment. 
+Sorry about the code being messy. I will clean it up later. 
 
 ## How to run
 
 1. Install OpenAI's library `pip3 install openai`
-2. Add your own OpenAI API Key where it's written "your api key" in `agent.py`
+2. Create a file called `secrets.json` and write this in it `{"apiKey": "<your openAI api key>"}` 
 3. Run `python3 agent.py`

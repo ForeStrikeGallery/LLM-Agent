@@ -6,9 +6,14 @@ import ast
 import shlex
 import time 
 import subprocess
+import json 
+from action import Action 
+
+with open('secrets.json') as f:
+	secrets = json.load(f)
 
 openai.organization = "org-rpFAIRUIBdByWr2P89N0MRmO"
-openai.api_key = "<your api key>"
+openai.api_key = secrets["apiKey"]
 
 def getResponse(prompt, system_msg = "you are a helpful assistant"):
 	
@@ -29,8 +34,7 @@ def getResponse(prompt, system_msg = "you are a helpful assistant"):
 		time.sleep(5)
 		return getResponse(prompt)
 
-	result = response["choices"][0]["message"]["content"] 
-	return  result
+	return response["choices"][0]["message"]["content"] 
 
 response_format_prompt = '''Respond only in the format given below, don't add any extra text. If any extra text is present in your response,
 	the answer won't be parsable by the user, so always respond only in the format. This is crucial.  
@@ -75,132 +79,6 @@ response_format_prompt = '''Respond only in the format given below, don't add an
 
 steps_so_far = []
 goal = ""
-
-# not in use 
-def verify(res):
-
-	completed_tasks = "\n".join([str(s) for s in steps_so_far])
-	prompt = '''check if this current task is the correct next step for the goal, given all the tasks done so far.
-
-		current task: %s,
-		goal: %s,
-		previous tasks: %s
-
-		Carefully check previous tasks to make sure the current task neither (1) done previously nor (2) is an incorrect next step; for e.g. there might be some task to be done before the current task 
-
-		If it's the correct next step, respond with 'Yes, the given task is correct <the reason>' else say 'No, the given task is incorrect <the reason>'
-
-		If the next step is NOT correct, suggest what *should be* the next step 
-
-		Repond exactly in the above format. DO NOT add preceding or succeeding extra words. 
-	
-		''' % (res, goal, str(completed_tasks))
-
-	result = getResponse(prompt)
-
-	if result[:2] == "No":
-		verifier_suggestion = ''' 
-			task: %s,
-			checker response: %s
-
-			Based on this feedback, please repond with the correct next task
-		'''% (res, result)
-		task = ast.literal_eval(res)
-		steps_so_far.append({'task': task, 'task_execution_report': {'success':False, 'error': 'verifier stopped task from executing. Reason: %s'%(result)}})
-		main(verifier_suggestion)
-		return 
-
-# not in use 
-def checkIfDone():
-		
-	prompt = '''check if the goal is accomplished given the list of tasks done so far.
-
-			goal: %s,
-			tasks done so far: %s
-
-			if it's finished, respond with "yes", else, respond with "no"
-		'''	% (goal, str(steps_so_far))
-
-	result = getResponse(prompt)
-	return result
-
-
-def parse(command, prefix = ""):
-	command = prefix + " " + command
-	return shlex.split(command)	
-
-def run(command):
-	report = dict()
-	try:
-		print("Running command.. ", command)
-		parsed_command = parse(command)
-		output = None
-		if ">" in command or "|" in command:
-			subprocess.run(command, shell=True)
-			report["success"] = True
-			report["output"] = "shell command ran successfully" 
-			return report 
-		else:
-			output = subprocess.run(parsed_command, capture_output=True, text=True)
-		
-		if output.stderr != "":
-			raise Exception("Task failed with error : %s"%(output.stderr))
-		report["success"] = True
-		report["output"] = output.stdout
-	except Exception as e:
-		report["success"] = False
-		report["error"] = str(e)
-	return report 
-	
-def read(path):
-	report = dict()
-	print("Reading from file at..", path)
-	try:
-		with open(path, 'r') as file:
-			output = file.read()
-			report["output"] = output
-			report["success"] = True
-	except Exception as e:
-		report["success"] = False
-		report["error"] = str(e)
-
-	return report 
-
-def write(path, content):
-	report = dict()
-	print("Writing to file at..", path)
-	try:
-		with open(path, 'w') as file:
-			file.write(content)
-		report["output"] = "written successfully"
-		report["success"] = True
-	except Exception as e:
-		report["success"] = False
-		report["error"] = str(e)
-	return report 
-
-def navigate(path):
-	report = dict()
-	print("Navigating to...", path)
-	try:
-		os.chdir(path)	
-		report["output"] = "navigated successfully"
-		report["success"] = True
-	except Exception as e:
-		report["success"] = False
-		report["error"] = str(e)
-	return report 
-
-
-
-def lastTaskRepeating(res):
-	res = ast.literal_eval(res)
-	
-	if len(steps_so_far) > 0: 	
-		print("lastTaskRepeatingCheck", res["params"], steps_so_far[-1]['task']["params"])
-
-	return len(steps_so_far) > 0 and res["params"] == steps_so_far[-1]['task']["params"]
-	
 
 def strip(string):
 	start_index = string.find('{')
@@ -293,6 +171,7 @@ def main(prefix="", reduce_context = False):
 			task = ast.literal_eval(res)
 			handleTask(task)
 		except Exception as e:
+			print(str(e))
 			print("Response not in correct format; requesting response again") 
 			return main("Please don't add extra words in your response. Only write responses in the format requested. Your last response: %s"%(res))
 
@@ -304,13 +183,13 @@ def handleTask(task):
 	report = dict() 
 
 	if task['type'] == 'run':
-		report = run(task['params']['command'])
+		report = Action.run(task['params']['command'])
 	elif task['type'] == 'write':
-		report = write(task['params']['path'], task['params']['content']);
+		report = Action.write(task['params']['path'], task['params']['content']);
 	elif task['type'] == 'read':
-		report = read(task['params']['path'])
+		report = Action.read(task['params']['path'])
 	elif task['type'] == 'navigate':
-		report = navigate(task['params']['path'])	
+		report = Action.navigate(task['params']['path'])	
 
 	if report["success"] == False:
 		prompt = '''Your last task failed. 
@@ -320,8 +199,7 @@ def handleTask(task):
 		Please fix this error as your next task
 		Try to gather more information by running commands or reading files to 
 		make sure you guess for the root cause is correct.
-
-		''' % (res, report["error"]) 
+''' % (str(task), report["error"]) 
 
 		print("Task failed, ", report) 
 		steps_so_far.append({'task': task, 'task_execution_report': report}) 
